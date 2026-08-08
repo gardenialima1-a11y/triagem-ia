@@ -223,7 +223,11 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
                       <td className="py-3">
                         {c.analise?.dadosPessoais?.nome || c.nomeArquivo}
                         {c.status === "erro" && (
-                          <span className="text-red-500 text-xs block">Erro ao processar</span>
+                          <span className="text-red-500 text-xs block max-w-xs">
+                            {c.analise?.avisoExtracao ||
+                              c.analise?.erroProcessamento ||
+                              "Erro ao processar"}
+                          </span>
                         )}
                         {c.status === "pendente" && (
                           <span className="text-gray-400 text-xs block">Aguardando análise</span>
