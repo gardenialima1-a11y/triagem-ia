@@ -59,7 +59,10 @@ export async function POST(
   } catch (err: any) {
     await prisma.candidato.update({
       where: { id: params.id },
-      data: { status: "erro" },
+      data: {
+        status: "erro",
+        analise: { erroProcessamento: err.message },
+      },
     });
     return NextResponse.json(
       { erro: `Erro ao analisar currículo: ${err.message}` },
