@@ -3,10 +3,14 @@
 // (seção 42 do spec: permite trocar o modelo de IA no futuro
 // sem precisar reconstruir o sistema — toda chamada de IA
 // passa por esta função)
+//
+// Usando o Google Gemini (tier gratuito, sem cartão de crédito).
+// Se um dia você quiser trocar para outro modelo, só precisa
+// mexer neste arquivo — o resto do sistema não muda.
 // ==========================================================
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const MODEL = "claude-sonnet-4-6";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const MODEL = "gemini-2.5-flash";
 
 type ChamadaIA = {
   system: string;
@@ -15,7 +19,7 @@ type ChamadaIA = {
 };
 
 /**
- * Chama a IA e espera receber APENAS um JSON como resposta.
+ * Chama a IA (Google Gemini) e espera receber APENAS um JSON como resposta.
  * Faz a limpeza de possíveis blocos de markdown (```json ... ```)
  * e lança erro claro se a resposta não for um JSON válido.
  */
@@ -24,24 +28,25 @@ export async function chamarIAJson<T = any>({
   prompt,
   maxTokens = 4000,
 }: ChamadaIA): Promise<T> {
-  if (!ANTHROPIC_API_KEY) {
+  if (!GEMINI_API_KEY) {
     throw new Error(
-      "ANTHROPIC_API_KEY não configurada. Adicione essa variável de ambiente no Vercel."
+      "GEMINI_API_KEY não configurada. Adicione essa variável de ambiente no Vercel."
     );
   }
 
-  const response = await fetch("https://api.anthropic.com/v1/messages", {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+
+  const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_API_KEY,
-      "anthropic-version": "2023-06-01",
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: "user", content: prompt }],
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: maxTokens,
+        responseMimeType: "application/json",
+        temperature: 0.3,
+      },
     }),
   });
 
@@ -51,8 +56,16 @@ export async function chamarIAJson<T = any>({
   }
 
   const data = await response.json();
-  const textBlock = data.content?.find((c: any) => c.type === "text");
-  const rawText: string = textBlock?.text ?? "";
+
+  const rawText: string =
+    data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "";
+
+  if (!rawText) {
+    const motivoBloqueio = data.candidates?.[0]?.finishReason;
+    throw new Error(
+      `A IA não retornou conteúdo (motivo: ${motivoBloqueio ?? "desconhecido"}). Resposta bruta: ${JSON.stringify(data).slice(0, 500)}`
+    );
+  }
 
   const cleaned = rawText
     .trim()
