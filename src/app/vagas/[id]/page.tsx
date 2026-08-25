@@ -12,6 +12,7 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
   const [salvandoPesos, setSalvandoPesos] = useState(false);
   const [enviandoArquivos, setEnviandoArquivos] = useState(false);
   const [progressoAnalise, setProgressoAnalise] = useState({ feito: 0, total: 0 });
+  const [reanalisandoId, setReanalisandoId] = useState<string | null>(null);
   const [erro, setErro] = useState("");
 
   const carregarVaga = useCallback(async () => {
@@ -86,12 +87,45 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
     }
   }
 
+  // Reanalisa um único candidato (usado quando a análise deu erro ou
+  // ficou pendente, sem precisar reenviar o arquivo do zero)
+  async function reanalisarCandidato(id: string) {
+    setReanalisandoId(id);
+    setErro("");
+    try {
+      const res = await fetch(`/api/candidatos/${id}/analisar`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setErro(data.erro || "Erro ao reanalisar currículo.");
+      }
+    } finally {
+      setReanalisandoId(null);
+      await carregarVaga();
+    }
+  }
+
+  // Reanalisa todos os candidatos com erro ou pendentes, um de cada vez,
+  // sem travar a tela nem exigir reenvio de arquivo
+  async function reanalisarTodosComErro() {
+    const pendentes = candidatosComProblema.map((c: any) => c.id);
+    if (!pendentes.length) return;
+    setProgressoAnalise({ feito: 0, total: pendentes.length });
+    for (let i = 0; i < pendentes.length; i++) {
+      await fetch(`/api/candidatos/${pendentes[i]}/analisar`, { method: "POST" });
+      setProgressoAnalise({ feito: i + 1, total: pendentes.length });
+      await carregarVaga();
+    }
+  }
+
   if (carregando) return <p className="text-gray-400 text-sm">Carregando vaga...</p>;
   if (!vaga) return <p>Vaga não encontrada.</p>;
 
   const matriz = vaga.matrizCompetencias;
   const candidatosOrdenados = [...(vaga.candidatos || [])].sort(
     (a: any, b: any) => (b.scoreGeral ?? -1) - (a.scoreGeral ?? -1)
+  );
+  const candidatosComProblema = candidatosOrdenados.filter(
+    (c: any) => c.status === "erro" || c.status === "pendente"
   );
 
   return (
@@ -203,9 +237,20 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
           {/* Ranking */}
           {candidatosOrdenados.length > 0 && (
             <div className="card p-6 overflow-x-auto">
-              <h2 className="font-medium text-gray-900 mb-4">
-                Ranking ({candidatosOrdenados.length} currículo(s) analisado(s))
-              </h2>
+              <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                <h2 className="font-medium text-gray-900">
+                  Ranking ({candidatosOrdenados.length} currículo(s) analisado(s))
+                </h2>
+                {candidatosComProblema.length > 0 && (
+                  <button
+                    className="btn-secondary text-sm"
+                    onClick={reanalisarTodosComErro}
+                    disabled={progressoAnalise.total > 0 && progressoAnalise.feito < progressoAnalise.total}
+                  >
+                    Tentar novamente todos ({candidatosComProblema.length})
+                  </button>
+                )}
+              </div>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-gray-500 border-b">
@@ -242,6 +287,15 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
                           <Link href={`/candidatos/${c.id}`} className="text-brand-500 hover:underline">
                             Ver análise →
                           </Link>
+                        )}
+                        {(c.status === "erro" || c.status === "pendente") && (
+                          <button
+                            className="text-brand-500 hover:underline text-sm disabled:opacity-50 disabled:cursor-wait"
+                            onClick={() => reanalisarCandidato(c.id)}
+                            disabled={reanalisandoId === c.id}
+                          >
+                            {reanalisandoId === c.id ? "Analisando..." : "Tentar novamente"}
+                          </button>
                         )}
                       </td>
                     </tr>
