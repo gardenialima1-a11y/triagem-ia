@@ -24,7 +24,7 @@ export async function POST(
       escolaridadeMinima: vaga.escolaridadeMinima,
     });
 
-    const resultado = await chamarIAJson<any>({ system, prompt, maxTokens: 4000 });
+    const resultado = await chamarIAJson<any>({ system, prompt, maxTokens: 8000 });
 
     // Converte os pesos sugeridos pela IA (formato com explicação) em pesos simples,
     // já pré-preenchidos para o RH aprovar/editar (modo híbrido — seção 34)
