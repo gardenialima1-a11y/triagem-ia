@@ -26,7 +26,7 @@ type ChamadaIA = {
 export async function chamarIAJson<T = any>({
   system,
   prompt,
-  maxTokens = 4000,
+  maxTokens = 10000,
 }: ChamadaIA): Promise<T> {
   if (!GEMINI_API_KEY) {
     throw new Error(
@@ -77,6 +77,14 @@ export async function chamarIAJson<T = any>({
   try {
     return JSON.parse(cleaned) as T;
   } catch (err) {
+    // Se a resposta foi cortada por falta de espaço (finishReason MAX_TOKENS),
+    // avisa isso claramente em vez de só dizer "JSON inválido".
+    const finishReason = data.candidates?.[0]?.finishReason;
+    if (finishReason === "MAX_TOKENS") {
+      throw new Error(
+        `A resposta da IA foi cortada por falta de espaço (limite de tokens atingido). Tente novamente ou aumente o maxTokens desta chamada. Resposta bruta: ${rawText.slice(-300)}`
+      );
+    }
     throw new Error(
       `A IA retornou um JSON inválido. Resposta bruta: ${rawText.slice(0, 500)}`
     );
