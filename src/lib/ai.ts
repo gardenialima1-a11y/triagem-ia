@@ -26,7 +26,7 @@ type ChamadaIA = {
 export async function chamarIAJson<T = any>({
   system,
   prompt,
-  maxTokens = 10000,
+  maxTokens = 16000,
 }: ChamadaIA): Promise<T> {
   if (!GEMINI_API_KEY) {
     throw new Error(
