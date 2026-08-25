@@ -36,7 +36,7 @@ export async function POST(
       pesos
     );
 
-    const analise = await chamarIAJson<any>({ system, prompt, maxTokens: 4000 });
+    const analise = await chamarIAJson<any>({ system, prompt, maxTokens: 20000 });
     const scoreFinal = calcularScoreFinal(analise.scores, pesos);
 
     const atualizado = await prisma.candidato.update({
