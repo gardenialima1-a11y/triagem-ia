@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import BadgeAderencia from "@/components/BadgeAderencia";
+import DashboardVaga from "@/components/DashboardVaga";
 
 export default function DetalheVagaPage({ params }: { params: { id: string } }) {
   const [vaga, setVaga] = useState<any>(null);
@@ -13,6 +14,7 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
   const [enviandoArquivos, setEnviandoArquivos] = useState(false);
   const [progressoAnalise, setProgressoAnalise] = useState({ feito: 0, total: 0 });
   const [reanalisandoId, setReanalisandoId] = useState<string | null>(null);
+  const [selecionados, setSelecionados] = useState<string[]>([]);
   const [erro, setErro] = useState("");
 
   const carregarVaga = useCallback(async () => {
@@ -117,6 +119,13 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
     }
   }
 
+  // Marca/desmarca um candidato na seleção usada para comparar lado a lado
+  function alternarSelecao(id: string) {
+    setSelecionados((atual) =>
+      atual.includes(id) ? atual.filter((x) => x !== id) : [...atual, id]
+    );
+  }
+
   if (carregando) return <p className="text-gray-400 text-sm">Carregando vaga...</p>;
   if (!vaga) return <p>Vaga não encontrada.</p>;
 
@@ -139,6 +148,8 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
       </div>
 
       {erro && <p className="text-red-600 text-sm">{erro}</p>}
+
+      <DashboardVaga candidatos={vaga.candidatos || []} />
 
       {/* ETAPA 3-4: interpretação da vaga pela IA */}
       {!matriz && (
@@ -241,19 +252,40 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
                 <h2 className="font-medium text-gray-900">
                   Ranking ({candidatosOrdenados.length} currículo(s) analisado(s))
                 </h2>
-                {candidatosComProblema.length > 0 && (
-                  <button
-                    className="btn-secondary text-sm"
-                    onClick={reanalisarTodosComErro}
-                    disabled={progressoAnalise.total > 0 && progressoAnalise.feito < progressoAnalise.total}
-                  >
-                    Tentar novamente todos ({candidatosComProblema.length})
-                  </button>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {selecionados.length >= 2 && (
+                    <Link
+                      href={`/vagas/${params.id}/comparar?ids=${selecionados.join(",")}`}
+                      className="btn-secondary text-sm"
+                    >
+                      Comparar selecionados ({selecionados.length})
+                    </Link>
+                  )}
+                  {candidatosOrdenados.some((c: any) => c.status === "analisado") && (
+                    <a
+                      href={`/api/vagas/${params.id}/pdf`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-secondary text-sm"
+                    >
+                      Baixar relatório comparativo (PDF)
+                    </a>
+                  )}
+                  {candidatosComProblema.length > 0 && (
+                    <button
+                      className="btn-secondary text-sm"
+                      onClick={reanalisarTodosComErro}
+                      disabled={progressoAnalise.total > 0 && progressoAnalise.feito < progressoAnalise.total}
+                    >
+                      Tentar novamente todos ({candidatosComProblema.length})
+                    </button>
+                  )}
+                </div>
               </div>
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-gray-500 border-b">
+                    <th className="pb-2 w-8"></th>
                     <th className="pb-2">#</th>
                     <th className="pb-2">Candidato</th>
                     <th className="pb-2">Score</th>
@@ -264,6 +296,16 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
                 <tbody>
                   {candidatosOrdenados.map((c: any, i: number) => (
                     <tr key={c.id} className="border-b last:border-0">
+                      <td className="py-3">
+                        {c.status === "analisado" && (
+                          <input
+                            type="checkbox"
+                            checked={selecionados.includes(c.id)}
+                            onChange={() => alternarSelecao(c.id)}
+                            aria-label={`Selecionar ${c.analise?.dadosPessoais?.nome || c.nomeArquivo} para comparar`}
+                          />
+                        )}
+                      </td>
                       <td className="py-3">{i + 1}º</td>
                       <td className="py-3">
                         {c.analise?.dadosPessoais?.nome || c.nomeArquivo}
@@ -284,9 +326,19 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
                       <td className="py-3 capitalize">{c.statusRH?.replace("_", " ") || "—"}</td>
                       <td className="py-3">
                         {c.status === "analisado" && (
-                          <Link href={`/candidatos/${c.id}`} className="text-brand-500 hover:underline">
-                            Ver análise →
-                          </Link>
+                          <div className="flex items-center gap-3">
+                            <Link href={`/candidatos/${c.id}`} className="text-brand-500 hover:underline">
+                              Ver análise →
+                            </Link>
+                            <a
+                              href={`/api/candidatos/${c.id}/pdf`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-gray-400 hover:text-brand-500 hover:underline"
+                            >
+                              PDF
+                            </a>
+                          </div>
                         )}
                         {(c.status === "erro" || c.status === "pendente") && (
                           <button

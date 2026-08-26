@@ -44,7 +44,17 @@ export default function CandidatoPage({ params }: { params: { id: string } }) {
           <h1 className="text-2xl font-semibold text-gray-900">
             {a.dadosPessoais?.nome || candidato.nomeArquivo}
           </h1>
-          <BadgeAderencia score={candidato.scoreGeral} />
+          <div className="flex items-center gap-3">
+            <a
+              href={`/api/candidatos/${candidato.id}/pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary text-sm"
+            >
+              Baixar PDF
+            </a>
+            <BadgeAderencia score={candidato.scoreGeral} />
+          </div>
         </div>
         <p className="text-sm text-gray-400">
           Análise gerada por IA — requer validação humana.
