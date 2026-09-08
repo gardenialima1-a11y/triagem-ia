@@ -36,59 +36,79 @@ export async function chamarIAJson<T = any>({
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        maxOutputTokens: maxTokens,
-        responseMimeType: "application/json",
-        temperature: 0.3,
-      },
-    }),
-  });
+  // Tentativas automáticas em caso de sobrecarga temporária do Gemini (503)
+  // ou limite de requisições (429). Espera crescente entre tentativas:
+  // 3s, 8s, 15s — dá tempo do pico de demanda passar antes de desistir.
+  const ESPERAS_MS = [3000, 8000, 15000];
+  let ultimoErroTexto = "";
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Erro na chamada da IA (${response.status}): ${errText}`);
-  }
+  for (let tentativa = 0; tentativa <= ESPERAS_MS.length; tentativa++) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          responseMimeType: "application/json",
+          temperature: 0.3,
+        },
+      }),
+    });
 
-  const data = await response.json();
-
-  const rawText: string =
-    data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "";
-
-  if (!rawText) {
-    const motivoBloqueio = data.candidates?.[0]?.finishReason;
-    throw new Error(
-      `A IA não retornou conteúdo (motivo: ${motivoBloqueio ?? "desconhecido"}). Resposta bruta: ${JSON.stringify(data).slice(0, 500)}`
-    );
-  }
-
-  const cleaned = rawText
-    .trim()
-    .replace(/^```json/i, "")
-    .replace(/^```/, "")
-    .replace(/```$/, "")
-    .trim();
-
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch (err) {
-    // Se a resposta foi cortada por falta de espaço (finishReason MAX_TOKENS),
-    // avisa isso claramente em vez de só dizer "JSON inválido".
-    const finishReason = data.candidates?.[0]?.finishReason;
-    if (finishReason === "MAX_TOKENS") {
+    if (response.status === 503 || response.status === 429) {
+      ultimoErroTexto = await response.text();
+      if (tentativa < ESPERAS_MS.length) {
+        await new Promise((r) => setTimeout(r, ESPERAS_MS[tentativa]));
+        continue;
+      }
       throw new Error(
-        `A resposta da IA foi cortada por falta de espaço (limite de tokens atingido). Tente novamente ou aumente o maxTokens desta chamada. Resposta bruta: ${rawText.slice(-300)}`
+        `A IA do Google (Gemini) está indisponível por sobrecarga no momento, mesmo após ${ESPERAS_MS.length} novas tentativas automáticas. Aguarde alguns minutos e tente novamente. Detalhe técnico: ${ultimoErroTexto}`
       );
     }
-    throw new Error(
-      `A IA retornou um JSON inválido. Resposta bruta: ${rawText.slice(0, 500)}`
-    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Erro na chamada da IA (${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+
+    const rawText: string =
+      data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "";
+
+    if (!rawText) {
+      const motivoBloqueio = data.candidates?.[0]?.finishReason;
+      throw new Error(
+        `A IA não retornou conteúdo (motivo: ${motivoBloqueio ?? "desconhecido"}). Resposta bruta: ${JSON.stringify(data).slice(0, 500)}`
+      );
+    }
+
+    const cleaned = rawText
+      .trim()
+      .replace(/^```json/i, "")
+      .replace(/^```/, "")
+      .replace(/```$/, "")
+      .trim();
+
+    try {
+      return JSON.parse(cleaned) as T;
+    } catch (err) {
+      const finishReason = data.candidates?.[0]?.finishReason;
+      if (finishReason === "MAX_TOKENS") {
+        throw new Error(
+          `A resposta da IA foi cortada por falta de espaço (limite de tokens atingido). Tente novamente ou aumente o maxTokens desta chamada. Resposta bruta: ${rawText.slice(-300)}`
+        );
+      }
+      throw new Error(
+        `A IA retornou um JSON inválido. Resposta bruta: ${rawText.slice(0, 500)}`
+      );
+    }
   }
+
+  // Não deveria chegar aqui, mas por segurança:
+  throw new Error(`Falha ao chamar a IA após múltiplas tentativas. ${ultimoErroTexto}`);
 }
 
 // ----------------------------------------------------------

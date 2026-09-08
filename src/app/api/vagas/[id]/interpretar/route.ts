@@ -3,6 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { chamarIAJson, promptInterpretarVaga } from "@/lib/ai";
 import { PESOS_PADRAO } from "@/lib/scoring";
 
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 // POST /api/vagas/[id]/interpretar
 // Botão "Analisar vaga com IA" (seção 39, etapa 3 do spec)
 export async function POST(
