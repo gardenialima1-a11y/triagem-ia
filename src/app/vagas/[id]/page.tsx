@@ -93,16 +93,16 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
 
     await carregarVaga();
 
-    // dispara a análise da IA dos currículos pendentes, 3 ao mesmo tempo
+    // dispara a análise da IA dos currículos pendentes, 2 ao mesmo tempo
     const idsParaAnalisar = data.resultados.filter((r: any) => r.ok).map((r: any) => r.id);
     await analisarEmLotes(idsParaAnalisar);
   }
 
   // VELOCIDADE: antes os currículos eram analisados um de cada vez
   // (10 currículos = 10 esperas em fila). Agora 3 rodam juntos.
-  // Não passamos de 3 para não estourar o limite do Gemini gratuito.
+  // Usamos só 2 para não estourar o limite de pedidos do Gemini gratuito.
   async function analisarEmLotes(ids: string[]) {
-    const SIMULTANEOS = 3;
+    const SIMULTANEOS = 2;
     let feito = 0;
     let proximo = 0;
     setProgressoAnalise({ feito: 0, total: ids.length });
@@ -110,10 +110,16 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
     async function trabalhador() {
       while (proximo < ids.length) {
         const id = ids[proximo++];
-        try {
-          await fetch(`/api/candidatos/${id}/analisar`, { method: "POST" });
-        } catch {
-          // erro fica registrado no próprio candidato (status "erro")
+        // Se o servidor cair (ex.: erro 504), tenta mais 1 vez sozinho
+        for (let tentativa = 1; tentativa <= 2; tentativa++) {
+          try {
+            const res = await fetch(`/api/candidatos/${id}/analisar`, { method: "POST" });
+            if (res.ok) break;
+            const corpo = await res.json().catch(() => null);
+            if (corpo?.erro && tentativa === 2) setErro(corpo.erro);
+          } catch {
+            // falha de rede — tenta de novo
+          }
         }
         feito++;
         setProgressoAnalise({ feito, total: ids.length });

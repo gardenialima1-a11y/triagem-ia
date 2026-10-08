@@ -28,7 +28,8 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // Para interpretar a vaga: tarefa de organizar informação → modelos rápidos primeiro
 export const MODELOS_RAPIDOS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash"];
 // Para analisar currículo: tarefa de julgamento → modelo mais capaz primeiro
-export const MODELOS_ANALISE = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+// (o 3.6-flash é de "geração anterior" e foi o que travou; o 3.8-flash é o atual)
+export const MODELOS_ANALISE = ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 
 const PRAZO_TOTAL_MS = 52000; // margem de segurança antes dos 60s do Vercel
 
@@ -300,6 +301,12 @@ ${JSON.stringify(matrizVaga, null, 2)}
 
 Pesos finais aprovados pelo RH:
 ${JSON.stringify(pesos, null, 2)}
+
+SEJA CONCISO (isso deixa a análise mais rápida e evita travamentos):
+- "responsabilidades": no máximo 2 frases por experiência; liste no máximo as 6 experiências mais recentes/relevantes.
+- Cada "justificativa", "evidencia" e "trechoEvidencia": no máximo 1 frase curta (até 25 palavras).
+- No máximo 6 itens em cada lista (pontos fortes, gaps, evidências, pontos a validar, perguntas).
+- "requisitosAtendidos": apenas os requisitos eliminatórios e críticos da vaga.
 
 Responda SOMENTE com um JSON válido, sem texto antes ou depois, seguindo EXATAMENTE este formato:
 

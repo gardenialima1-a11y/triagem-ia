@@ -36,7 +36,14 @@ export async function POST(
       pesos
     );
 
-    const analise = await chamarIAJson<any>({ system, prompt, maxTokens: 20000 });
+    // Cada modelo tem até 24s; se travar, passa para o próximo
+    // (assim cabem 2 tentativas antes do limite de 60s do Vercel)
+    const analise = await chamarIAJson<any>({
+      system,
+      prompt,
+      maxTokens: 20000,
+      limitePorTentativaMs: 24000,
+    });
     const scoreFinal = calcularScoreFinal(analise.scores, pesos);
 
     const atualizado = await prisma.candidato.update({
