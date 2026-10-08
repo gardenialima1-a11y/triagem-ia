@@ -78,15 +78,37 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
 
     await carregarVaga();
 
-    // dispara a análise da IA para cada currículo pendente, um de cada vez
+    // dispara a análise da IA dos currículos pendentes, 3 ao mesmo tempo
     const idsParaAnalisar = data.resultados.filter((r: any) => r.ok).map((r: any) => r.id);
-    setProgressoAnalise({ feito: 0, total: idsParaAnalisar.length });
+    await analisarEmLotes(idsParaAnalisar);
+  }
 
-    for (let i = 0; i < idsParaAnalisar.length; i++) {
-      await fetch(`/api/candidatos/${idsParaAnalisar[i]}/analisar`, { method: "POST" });
-      setProgressoAnalise({ feito: i + 1, total: idsParaAnalisar.length });
-      await carregarVaga();
+  // VELOCIDADE: antes os currículos eram analisados um de cada vez
+  // (10 currículos = 10 esperas em fila). Agora 3 rodam juntos.
+  // Não passamos de 3 para não estourar o limite do Gemini gratuito.
+  async function analisarEmLotes(ids: string[]) {
+    const SIMULTANEOS = 3;
+    let feito = 0;
+    let proximo = 0;
+    setProgressoAnalise({ feito: 0, total: ids.length });
+
+    async function trabalhador() {
+      while (proximo < ids.length) {
+        const id = ids[proximo++];
+        try {
+          await fetch(`/api/candidatos/${id}/analisar`, { method: "POST" });
+        } catch {
+          // erro fica registrado no próprio candidato (status "erro")
+        }
+        feito++;
+        setProgressoAnalise({ feito, total: ids.length });
+        await carregarVaga();
+      }
     }
+
+    await Promise.all(
+      Array.from({ length: Math.min(SIMULTANEOS, ids.length) }, () => trabalhador())
+    );
   }
 
   // Reanalisa um único candidato (usado quando a análise deu erro ou
@@ -111,12 +133,7 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
   async function reanalisarTodosComErro() {
     const pendentes = candidatosComProblema.map((c: any) => c.id);
     if (!pendentes.length) return;
-    setProgressoAnalise({ feito: 0, total: pendentes.length });
-    for (let i = 0; i < pendentes.length; i++) {
-      await fetch(`/api/candidatos/${pendentes[i]}/analisar`, { method: "POST" });
-      setProgressoAnalise({ feito: i + 1, total: pendentes.length });
-      await carregarVaga();
-    }
+    await analisarEmLotes(pendentes);
   }
 
   // Marca/desmarca um candidato na seleção usada para comparar lado a lado

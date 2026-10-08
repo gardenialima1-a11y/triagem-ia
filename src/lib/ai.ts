@@ -53,6 +53,10 @@ export async function chamarIAJson<T = any>({
           maxOutputTokens: maxTokens,
           responseMimeType: "application/json",
           temperature: 0.3,
+          // VELOCIDADE: o gemini-3.6-flash "pensa" antes de responder
+          // (nível "medium" por padrão). Esse raciocínio interno é o que
+          // mais demora. "low" mantém boa qualidade e responde bem mais rápido.
+          thinkingConfig: { thinkingLevel: "low" },
         },
       }),
     });
