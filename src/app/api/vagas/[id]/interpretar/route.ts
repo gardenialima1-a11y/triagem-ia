@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { chamarIAJson, promptInterpretarVaga } from "@/lib/ai";
+import { chamarIAJson, promptInterpretarVaga, MetricasIA } from "@/lib/ai";
 import { PESOS_PADRAO } from "@/lib/scoring";
 
 export const runtime = "nodejs";
@@ -27,7 +27,16 @@ export async function POST(
       escolaridadeMinima: vaga.escolaridadeMinima,
     });
 
-    const resultado = await chamarIAJson<any>({ system, prompt, maxTokens: 8000 });
+    // VELOCIDADE: interpretar a vaga é organizar informação (não julgar
+    // pessoas), então a IA quase não precisa "pensar" — nível "minimal".
+    const metricas: Partial<MetricasIA> = {};
+    const resultado = await chamarIAJson<any>({
+      system,
+      prompt,
+      maxTokens: 8000,
+      pensamento: "minimal",
+      metricas,
+    });
 
     // Converte os pesos sugeridos pela IA (formato com explicação) em pesos simples,
     // já pré-preenchidos para o RH aprovar/editar (modo híbrido — seção 34)
@@ -52,7 +61,7 @@ export async function POST(
       },
     });
 
-    return NextResponse.json(vagaAtualizada);
+    return NextResponse.json({ ...vagaAtualizada, _diagnosticoIA: metricas });
   } catch (err: any) {
     return NextResponse.json(
       { erro: `Erro ao interpretar a vaga com IA: ${err.message}` },

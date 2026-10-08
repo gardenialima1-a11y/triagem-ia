@@ -12,10 +12,22 @@
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const MODEL = "gemini-3.6-flash";
 
+export type MetricasIA = {
+  segundosTotal: number;        // tempo total que o usuário esperou
+  segundosEsperandoFila: number; // tempo parado esperando o Gemini liberar (erro 429/503)
+  tentativas: number;           // quantas vezes chamamos o Gemini
+  tokensPensamento: number;     // "rascunho" interno da IA (quanto maior, mais lento)
+  tokensResposta: number;       // tamanho da resposta escrita
+};
+
 type ChamadaIA = {
   system: string;
   prompt: string;
   maxTokens?: number;
+  // Quanto a IA "pensa" antes de responder. Menos = mais rápido.
+  pensamento?: "minimal" | "low" | "medium" | "high";
+  // Se for passado, é preenchido com o diagnóstico de tempo da chamada
+  metricas?: Partial<MetricasIA>;
 };
 
 /**
@@ -27,7 +39,11 @@ export async function chamarIAJson<T = any>({
   system,
   prompt,
   maxTokens = 16000,
+  pensamento = "low",
+  metricas,
 }: ChamadaIA): Promise<T> {
+  const inicio = Date.now();
+  let msEsperando = 0;
   if (!GEMINI_API_KEY) {
     throw new Error(
       "GEMINI_API_KEY não configurada. Adicione essa variável de ambiente no Vercel."
@@ -56,14 +72,16 @@ export async function chamarIAJson<T = any>({
           // VELOCIDADE: o gemini-3.6-flash "pensa" antes de responder
           // (nível "medium" por padrão). Esse raciocínio interno é o que
           // mais demora. "low" mantém boa qualidade e responde bem mais rápido.
-          thinkingConfig: { thinkingLevel: "low" },
+          thinkingConfig: { thinkingLevel: pensamento },
         },
       }),
     });
 
     if (response.status === 503 || response.status === 429) {
       ultimoErroTexto = await response.text();
+      console.warn(`[IA] Gemini ocupado (${response.status}) na tentativa ${tentativa + 1}`);
       if (tentativa < ESPERAS_MS.length) {
+        msEsperando += ESPERAS_MS[tentativa];
         await new Promise((r) => setTimeout(r, ESPERAS_MS[tentativa]));
         continue;
       }
@@ -78,6 +96,18 @@ export async function chamarIAJson<T = any>({
     }
 
     const data = await response.json();
+
+    // Diagnóstico de tempo (aparece nos Logs do Vercel e na tela)
+    const uso = data.usageMetadata ?? {};
+    const m: MetricasIA = {
+      segundosTotal: Math.round((Date.now() - inicio) / 100) / 10,
+      segundosEsperandoFila: msEsperando / 1000,
+      tentativas: tentativa + 1,
+      tokensPensamento: uso.thoughtsTokenCount ?? 0,
+      tokensResposta: uso.candidatesTokenCount ?? 0,
+    };
+    console.log("[IA] diagnóstico:", JSON.stringify(m));
+    if (metricas) Object.assign(metricas, m);
 
     const rawText: string =
       data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "";
@@ -130,6 +160,7 @@ REGRAS IMPORTANTES:
 - Separe competências técnicas de competências comportamentais.
 - Sugira pesos (que somem 100) explicando o motivo de cada peso.
 - Avalie a qualidade da própria descrição da vaga (clareza, excesso de requisitos, requisitos conflitantes).
+- SEJA CONCISO (isso deixa a resposta mais rápida): cada "motivo" e cada "explicacao" com no máximo 1 frase curta (até 20 palavras); no máximo 6 itens por lista; no máximo 6 perguntas de entrevista.
 - Responda SOMENTE com um JSON válido, sem nenhum texto antes ou depois, seguindo EXATAMENTE este formato:
 
 {

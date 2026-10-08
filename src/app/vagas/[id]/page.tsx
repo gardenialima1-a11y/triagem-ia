@@ -9,6 +9,8 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
   const [vaga, setVaga] = useState<any>(null);
   const [carregando, setCarregando] = useState(true);
   const [interpretando, setInterpretando] = useState(false);
+  const [segundosIA, setSegundosIA] = useState(0);
+  const [diagnosticoIA, setDiagnosticoIA] = useState<any>(null);
   const [pesos, setPesos] = useState<any>(null);
   const [salvandoPesos, setSalvandoPesos] = useState(false);
   const [enviandoArquivos, setEnviandoArquivos] = useState(false);
@@ -32,8 +34,21 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
   async function interpretarComIA() {
     setInterpretando(true);
     setErro("");
-    const res = await fetch(`/api/vagas/${params.id}/interpretar`, { method: "POST" });
-    const data = await res.json();
+    setDiagnosticoIA(null);
+    setSegundosIA(0);
+    // cronômetro na tela, para você ver quanto tempo a IA está levando
+    const cronometro = setInterval(() => setSegundosIA((s) => s + 1), 1000);
+    let res: Response;
+    let data: any;
+    try {
+      res = await fetch(`/api/vagas/${params.id}/interpretar`, { method: "POST" });
+      data = await res.json().catch(() => ({
+        erro: `O servidor demorou demais e desistiu (status ${res.status}). Tente de novo.`,
+      }));
+    } finally {
+      clearInterval(cronometro);
+    }
+    if (data?._diagnosticoIA) setDiagnosticoIA(data._diagnosticoIA);
     if (!res.ok) {
       setErro(data.erro || "Erro ao interpretar vaga.");
       setInterpretando(false);
@@ -166,6 +181,15 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
 
       {erro && <p className="text-red-600 text-sm">{erro}</p>}
 
+      {diagnosticoIA && (
+        <p className="text-xs text-gray-500">
+          Diagnóstico da IA: levou {diagnosticoIA.segundosTotal}s
+          {diagnosticoIA.segundosEsperandoFila > 0 &&
+            ` (dos quais ${diagnosticoIA.segundosEsperandoFila}s esperando o Gemini liberar — ${diagnosticoIA.tentativas} tentativas)`}
+          {" · "}pensamento: {diagnosticoIA.tokensPensamento} tokens · resposta: {diagnosticoIA.tokensResposta} tokens
+        </p>
+      )}
+
       <DashboardVaga candidatos={vaga.candidatos || []} />
 
       {/* ETAPA 3-4: interpretação da vaga pela IA */}
@@ -176,7 +200,7 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
             competências e pesos recomendados.
           </p>
           <button className="btn-primary" onClick={interpretarComIA} disabled={interpretando}>
-            {interpretando ? "Analisando vaga com IA..." : "Analisar vaga com IA"}
+            {interpretando ? `Analisando vaga com IA... ${segundosIA}s` : "Analisar vaga com IA"}
           </button>
         </div>
       )}
