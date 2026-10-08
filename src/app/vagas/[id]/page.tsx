@@ -184,9 +184,9 @@ export default function DetalheVagaPage({ params }: { params: { id: string } }) 
       {diagnosticoIA && (
         <p className="text-xs text-gray-500">
           Diagnóstico da IA: levou {diagnosticoIA.segundosTotal}s
-          {diagnosticoIA.segundosEsperandoFila > 0 &&
-            ` (dos quais ${diagnosticoIA.segundosEsperandoFila}s esperando o Gemini liberar — ${diagnosticoIA.tentativas} tentativas)`}
-          {" · "}pensamento: {diagnosticoIA.tokensPensamento} tokens · resposta: {diagnosticoIA.tokensResposta} tokens
+          {diagnosticoIA.modeloUsado && ` com ${diagnosticoIA.modeloUsado}`}
+          {diagnosticoIA.tentativas?.length > 1 &&
+            ` · tentativas: ${diagnosticoIA.tentativas.join(" | ")}`}
         </p>
       )}
 

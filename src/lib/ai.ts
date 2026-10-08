@@ -10,14 +10,34 @@
 // ==========================================================
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = "gemini-3.6-flash";
+
+// ----------------------------------------------------------
+// MODELOS E PLANO B
+// Antes o sistema usava 1 modelo só e, quando o Google estava
+// sobrecarregado, ficava esperando 3s + 8s + 15s pelo MESMO modelo.
+// Pior: se o Google simplesmente demorasse, não havia limite de
+// tempo nenhum — a tela ficava contando segundos sem fim.
+//
+// Agora:
+// 1) cada tentativa tem um tempo máximo (corta se travar);
+// 2) se um modelo falhar ou travar, passa NA HORA para o próximo;
+// 3) existe um prazo total, para SEMPRE devolver uma resposta
+//    (ou um erro claro) antes do limite de 60s do Vercel.
+// ----------------------------------------------------------
+
+// Para interpretar a vaga: tarefa de organizar informação → modelos rápidos primeiro
+export const MODELOS_RAPIDOS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.6-flash"];
+// Para analisar currículo: tarefa de julgamento → modelo mais capaz primeiro
+export const MODELOS_ANALISE = ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+
+const PRAZO_TOTAL_MS = 52000; // margem de segurança antes dos 60s do Vercel
 
 export type MetricasIA = {
-  segundosTotal: number;        // tempo total que o usuário esperou
-  segundosEsperandoFila: number; // tempo parado esperando o Gemini liberar (erro 429/503)
-  tentativas: number;           // quantas vezes chamamos o Gemini
-  tokensPensamento: number;     // "rascunho" interno da IA (quanto maior, mais lento)
-  tokensResposta: number;       // tamanho da resposta escrita
+  segundosTotal: number;   // tempo total que o usuário esperou
+  modeloUsado: string;     // qual modelo respondeu
+  tentativas: string[];    // o que aconteceu em cada tentativa
+  tokensPensamento: number;
+  tokensResposta: number;
 };
 
 type ChamadaIA = {
@@ -26,123 +46,172 @@ type ChamadaIA = {
   maxTokens?: number;
   // Quanto a IA "pensa" antes de responder. Menos = mais rápido.
   pensamento?: "minimal" | "low" | "medium" | "high";
-  // Se for passado, é preenchido com o diagnóstico de tempo da chamada
+  // Ordem de modelos a tentar (o primeiro que responder vence)
+  modelos?: string[];
+  // Tempo máximo de cada tentativa, em milissegundos
+  limitePorTentativaMs?: number;
+  // Se for passado, é preenchido com o diagnóstico da chamada
   metricas?: Partial<MetricasIA>;
 };
 
+class FalhaTentativa extends Error {}
+
+async function chamarUmModelo(
+  modelo: string,
+  corpo: any,
+  limiteMs: number
+): Promise<any> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelo}:generateContent?key=${GEMINI_API_KEY}`;
+  const controle = new AbortController();
+  const relogio = setTimeout(() => controle.abort(), limiteMs);
+  try {
+    let response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(corpo),
+      signal: controle.signal,
+    });
+
+    // Alguns modelos não aceitam a configuração de "pensamento".
+    // Se reclamar disso, tenta de novo o mesmo modelo sem ela.
+    if (response.status === 400) {
+      const txt = await response.text();
+      if (/thinking/i.test(txt)) {
+        const { thinkingConfig, ...semPensamento } = corpo.generationConfig;
+        response = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...corpo, generationConfig: semPensamento }),
+          signal: controle.signal,
+        });
+      } else {
+        throw new FalhaTentativa(`erro 400: ${txt.slice(0, 200)}`);
+      }
+    }
+
+    if (response.status === 429) throw new FalhaTentativa("limite gratuito de pedidos atingido (429)");
+    if (response.status === 503) throw new FalhaTentativa("Google sobrecarregado (503)");
+    if (response.status === 404) throw new FalhaTentativa("modelo não disponível para sua chave (404)");
+    if (!response.ok) {
+      const txt = await response.text();
+      throw new FalhaTentativa(`erro ${response.status}: ${txt.slice(0, 200)}`);
+    }
+    return await response.json();
+  } catch (err: any) {
+    if (err?.name === "AbortError") {
+      throw new FalhaTentativa(`não respondeu em ${Math.round(limiteMs / 1000)}s`);
+    }
+    if (err instanceof FalhaTentativa) throw err;
+    throw new FalhaTentativa(`falha de conexão: ${err?.message ?? err}`);
+  } finally {
+    clearTimeout(relogio);
+  }
+}
+
+function lerJson(data: any): any {
+  const rawText: string =
+    data.candidates?.[0]?.content?.parts
+      ?.filter((p: any) => !p.thought)
+      .map((p: any) => p.text ?? "")
+      .join("") ?? "";
+  const finishReason = data.candidates?.[0]?.finishReason;
+
+  if (!rawText) {
+    throw new FalhaTentativa(`resposta vazia (motivo: ${finishReason ?? "desconhecido"})`);
+  }
+
+  const cleaned = rawText
+    .trim()
+    .replace(/^```json/i, "")
+    .replace(/^```/, "")
+    .replace(/```$/, "")
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    if (finishReason === "MAX_TOKENS") {
+      throw new FalhaTentativa("resposta cortada (limite de tokens)");
+    }
+    throw new FalhaTentativa("JSON inválido na resposta");
+  }
+}
+
 /**
  * Chama a IA (Google Gemini) e espera receber APENAS um JSON como resposta.
- * Faz a limpeza de possíveis blocos de markdown (```json ... ```)
- * e lança erro claro se a resposta não for um JSON válido.
+ * Tenta os modelos em ordem, com tempo máximo por tentativa e prazo total.
  */
 export async function chamarIAJson<T = any>({
   system,
   prompt,
   maxTokens = 16000,
   pensamento = "low",
+  modelos = MODELOS_ANALISE,
+  limitePorTentativaMs = 40000,
   metricas,
 }: ChamadaIA): Promise<T> {
-  const inicio = Date.now();
-  let msEsperando = 0;
   if (!GEMINI_API_KEY) {
     throw new Error(
       "GEMINI_API_KEY não configurada. Adicione essa variável de ambiente no Vercel."
     );
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+  const inicio = Date.now();
+  const historico: string[] = [];
 
-  // Tentativas automáticas em caso de sobrecarga temporária do Gemini (503)
-  // ou limite de requisições (429). Espera crescente entre tentativas:
-  // 3s, 8s, 15s — dá tempo do pico de demanda passar antes de desistir.
-  const ESPERAS_MS = [3000, 8000, 15000];
-  let ultimoErroTexto = "";
+  const corpo = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: {
+      maxOutputTokens: maxTokens,
+      responseMimeType: "application/json",
+      temperature: 0.3,
+      thinkingConfig: { thinkingLevel: pensamento },
+    },
+  };
 
-  for (let tentativa = 0; tentativa <= ESPERAS_MS.length; tentativa++) {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: {
-          maxOutputTokens: maxTokens,
-          responseMimeType: "application/json",
-          temperature: 0.3,
-          // VELOCIDADE: o gemini-3.6-flash "pensa" antes de responder
-          // (nível "medium" por padrão). Esse raciocínio interno é o que
-          // mais demora. "low" mantém boa qualidade e responde bem mais rápido.
-          thinkingConfig: { thinkingLevel: pensamento },
-        },
-      }),
-    });
-
-    if (response.status === 503 || response.status === 429) {
-      ultimoErroTexto = await response.text();
-      console.warn(`[IA] Gemini ocupado (${response.status}) na tentativa ${tentativa + 1}`);
-      if (tentativa < ESPERAS_MS.length) {
-        msEsperando += ESPERAS_MS[tentativa];
-        await new Promise((r) => setTimeout(r, ESPERAS_MS[tentativa]));
-        continue;
-      }
-      throw new Error(
-        `A IA do Google (Gemini) está indisponível por sobrecarga no momento, mesmo após ${ESPERAS_MS.length} novas tentativas automáticas. Aguarde alguns minutos e tente novamente. Detalhe técnico: ${ultimoErroTexto}`
-      );
+  for (const modelo of modelos) {
+    const restante = PRAZO_TOTAL_MS - (Date.now() - inicio);
+    if (restante < 5000) {
+      historico.push(`${modelo}: não tentado (sem tempo restante)`);
+      break;
     }
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Erro na chamada da IA (${response.status}): ${errText}`);
-    }
-
-    const data = await response.json();
-
-    // Diagnóstico de tempo (aparece nos Logs do Vercel e na tela)
-    const uso = data.usageMetadata ?? {};
-    const m: MetricasIA = {
-      segundosTotal: Math.round((Date.now() - inicio) / 100) / 10,
-      segundosEsperandoFila: msEsperando / 1000,
-      tentativas: tentativa + 1,
-      tokensPensamento: uso.thoughtsTokenCount ?? 0,
-      tokensResposta: uso.candidatesTokenCount ?? 0,
-    };
-    console.log("[IA] diagnóstico:", JSON.stringify(m));
-    if (metricas) Object.assign(metricas, m);
-
-    const rawText: string =
-      data.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join("") ?? "";
-
-    if (!rawText) {
-      const motivoBloqueio = data.candidates?.[0]?.finishReason;
-      throw new Error(
-        `A IA não retornou conteúdo (motivo: ${motivoBloqueio ?? "desconhecido"}). Resposta bruta: ${JSON.stringify(data).slice(0, 500)}`
-      );
-    }
-
-    const cleaned = rawText
-      .trim()
-      .replace(/^```json/i, "")
-      .replace(/^```/, "")
-      .replace(/```$/, "")
-      .trim();
-
+    const t0 = Date.now();
     try {
-      return JSON.parse(cleaned) as T;
-    } catch (err) {
-      const finishReason = data.candidates?.[0]?.finishReason;
-      if (finishReason === "MAX_TOKENS") {
-        throw new Error(
-          `A resposta da IA foi cortada por falta de espaço (limite de tokens atingido). Tente novamente ou aumente o maxTokens desta chamada. Resposta bruta: ${rawText.slice(-300)}`
-        );
-      }
-      throw new Error(
-        `A IA retornou um JSON inválido. Resposta bruta: ${rawText.slice(0, 500)}`
-      );
+      const data = await chamarUmModelo(modelo, corpo, Math.min(limitePorTentativaMs, restante));
+      const resultado = lerJson(data);
+      const seg = Math.round((Date.now() - t0) / 100) / 10;
+      historico.push(`${modelo}: OK em ${seg}s`);
+
+      const uso = data.usageMetadata ?? {};
+      const m: MetricasIA = {
+        segundosTotal: Math.round((Date.now() - inicio) / 100) / 10,
+        modeloUsado: modelo,
+        tentativas: historico,
+        tokensPensamento: uso.thoughtsTokenCount ?? 0,
+        tokensResposta: uso.candidatesTokenCount ?? 0,
+      };
+      console.log("[IA] diagnóstico:", JSON.stringify(m));
+      if (metricas) Object.assign(metricas, m);
+      return resultado as T;
+    } catch (err: any) {
+      const seg = Math.round((Date.now() - t0) / 100) / 10;
+      historico.push(`${modelo}: ${err.message} (${seg}s)`);
+      console.warn(`[IA] ${modelo} falhou: ${err.message}`);
     }
   }
 
-  // Não deveria chegar aqui, mas por segurança:
-  throw new Error(`Falha ao chamar a IA após múltiplas tentativas. ${ultimoErroTexto}`);
+  if (metricas) {
+    Object.assign(metricas, {
+      segundosTotal: Math.round((Date.now() - inicio) / 100) / 10,
+      modeloUsado: "",
+      tentativas: historico,
+    });
+  }
+  throw new Error(
+    `Nenhum modelo do Gemini conseguiu responder agora. O que aconteceu: ${historico.join(" | ")}. ` +
+      `Se aparecer "limite gratuito" ou "sobrecarregado", é do lado do Google: aguarde 1-2 minutos e tente de novo.`
+  );
 }
 
 // ----------------------------------------------------------

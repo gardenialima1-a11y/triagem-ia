@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { chamarIAJson, promptInterpretarVaga, MetricasIA } from "@/lib/ai";
+import { chamarIAJson, promptInterpretarVaga, MetricasIA, MODELOS_RAPIDOS } from "@/lib/ai";
 import { PESOS_PADRAO } from "@/lib/scoring";
 
 export const runtime = "nodejs";
@@ -35,6 +35,8 @@ export async function POST(
       prompt,
       maxTokens: 8000,
       pensamento: "minimal",
+      modelos: MODELOS_RAPIDOS,
+      limitePorTentativaMs: 25000,
       metricas,
     });
 
